@@ -18,7 +18,7 @@ class GetUpdateData:
         
         if update_existing:
             try:
-                self.existing_data = (pd.read_csv(self.existing_data_path)
+                self.existing_data = (pd.read_csv(self.existing_data_path, parse_dates=['datetime'])
                                     .sort_values(['ticker', 'datetime'], ascending=False)
                                     .drop_duplicates(subset='ticker'))
             except:
@@ -154,6 +154,25 @@ class GetUpdateData:
                 print(f"Couldn't download {ticker}.")
         
         return data_frames
+    
+    def get_data_single_ticker(self, ticker):
+        
+        url = f'https://api.twelvedata.com/earliest_timestamp?symbol={ticker}&interval=1day&apikey={self.api_key}'
+        r = requests.get(url)
+                
+        start_date = r.text.split('"')[3]
+        end_date = date.today().strftime('%Y-%m-%d')
+        
+        url = f'https://api.twelvedata.com/time_series?&start_date={start_date}&end_date={end_date}&symbol={ticker}&format=CSV&interval=1day&apikey={self.api_key}'
+        r = requests.get(url)
+
+        data_string = r.content.decode('utf-8')
+        data_file = BytesIO(data_string.encode())
+        
+        data = pd.read_csv(data_file, delimiter=';')
+        data['ticker'] = ticker
+        
+        return data
         
          
     def download_data(self):
