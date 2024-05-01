@@ -51,7 +51,6 @@ class PrepData:
         target_type (str): [7dDirection, 7dPercReturn]
 
     Methods:
-        find_value_7_days_later(self, date)
         generate_target(self)
         create_train_test(self)
     """
@@ -72,32 +71,18 @@ class PrepData:
         self.targ_direction = targ_direction
         self.targ_perc_return = targ_perc_return
 
-    def find_value_7_days_later(self, date):
-        next_date = date + pd.Timedelta(days=7)
-        next_row = self.df.loc[self.df[self.date_col] == next_date]
-        if not next_row.empty:
-            return next_row.iloc[0][self.close_col]
-        else:
-            return None
-
     def generate_target(self):
-        self.df["7dClose"] = self.df.groupby(self.ticker_col)[self.date_col].apply(
-            lambda group: group.apply(self.find_value_7_days_later)
-        )
+        self.df["7tdClose"] = self.df.groupby(self.ticker_col)[self.close_col].shift(-7)
+        
         if self.targ_direction:
-            self.df["target"] = np.where(
-                self.df[self.close_col] > self.df["7dClose"], 1, 0
-            )
-
+            self.df["target"] = (self.df["7tdClose"] > self.df[self.close_col]).astype(int)
         elif self.targ_perc_return:
-            self.df["target"] = (
-                self.df["7dClose"] - self.df[self.close_col]
-            ) / self.df["7dClose"]
-
+            self.df["target"] = (self.df["7tdClose"] - self.df[self.close_col]) / self.df["7tdClose"]
         else:
             raise ValueError("One of [targ_direction, targ_perc_return] has to be True")
+        
+        self.df.drop("7tdClose", axis=1, inplace=True)
 
-        self.df.drop("7dClose", axis=1, inplace=True)
 
     def create_x_y(self):
         self.generate_target()
