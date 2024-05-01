@@ -42,11 +42,13 @@ class PreProcessor:
         
     def add_indicators(self):
         """ Add all default indicators from ta library, then add same indicator types with custom window size (defaulted to long term: ~1 year lookback)"""
-        self.open = self.df['open']
-        self.high = self.df['high']
-        self.low = self.df['low']
-        self.close = self.df['close']
-        self.volume = self.df['volume']
+        # self.open = self.df['open']
+        # self.high = self.df['high']
+        # self.low = self.df['low']
+        # self.close = self.df['close']
+        # self.volume = self.df['volume']
+        base_cols = ['open', 'high', 'low', 'close', 'volume']
+        self.df[base_cols] = np.log(self.df[base_cols])
         
         l_df = []
         
