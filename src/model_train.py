@@ -38,17 +38,19 @@ from sklearn.metrics import (
 )
 
 
-class PrepData:
+class ModelPrepData:
     """
     Description:
         prepares data for model training.
 
     Attributes:
         df (dataframe):
-        date_col (str): Column Name for date in yyyy-mm-dd format
         ticker_col (str): Column Name for ticker/symbol
         close_col (str): Column Name for close price
-        target_type (str): [7dDirection, 7dPercReturn]
+        features (list): List of feature column names
+        target_type (str): [direction, percent_gain]
+        look_ahead (int): Number of trading intervals to look ahead for target generation
+        test_size (float): test size to use for train/test split
 
     Methods:
         generate_target(self)
@@ -58,39 +60,61 @@ class PrepData:
     def __init__(
         self,
         df,
-        date_col,
         ticker_col,
         close_col,
-        targ_direction=False,
-        targ_perc_return=False,
+        features,
+        target_type,
+        look_ahead,
+        test_size=0.2,
     ):
-        self.df = df
-        self.date_col = date_col
+        self.df = df.copy()
         self.ticker_col = ticker_col
         self.close_col = close_col
-        self.targ_direction = targ_direction
-        self.targ_perc_return = targ_perc_return
+        self.features = features
+        self.target_type = target_type
+        self.look_ahead = look_ahead
+        self.test_size = test_size
 
     def generate_target(self):
-        self.df["7tdClose"] = self.df.groupby(self.ticker_col)[self.close_col].shift(-7)
-        
-        if self.targ_direction:
-            self.df["target"] = (self.df["7tdClose"] > self.df[self.close_col]).astype(int)
-        elif self.targ_perc_return:
-            self.df["target"] = (self.df["7tdClose"] - self.df[self.close_col]) / self.df["7tdClose"]
+        """
+        Description:
+            generates target variable for model training.
+        """
+
+        if self.target_type == "direction":
+            self.df["FutureClose"] = self.df.groupby(self.ticker_col)[
+                self.close_col
+            ].shift(self.look_ahead)
+            self.df["target"] = (
+                self.df["FutureClose"] > self.df[self.close_col]
+            ).astype(int)
+        elif self.target_type == "percent_gain":
+            self.df["FutureClose"] = self.df.groupby(self.ticker_col)[
+                self.close_col
+            ].shift(self.look_ahead)
+            self.df["target"] = (
+                self.df["FutureClose"] - self.df[self.close_col]
+            ) / self.df[self.close_col]
         else:
-            raise ValueError("One of [targ_direction, targ_perc_return] has to be True")
-        
-        self.df.drop("7tdClose", axis=1, inplace=True)
+            raise ValueError("target_type has to be one of [direction, percent_gain]")
 
+        self.df.drop("FutureClose", axis=1, inplace=True)
 
-    def create_x_y(self):
+    def create_train_test(self):
         self.generate_target()
+        self.df = self.df[self.features + ["target"]]
+        
+        self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        self.df.dropna(inplace=True)
 
         X = self.df.drop("target", axis=1)
         y = self.df["target"]
 
-        return X, y
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=self.test_size
+        )
+
+        return X_train, X_test, y_train, y_test
 
 
 class CreateLGBMModel:
@@ -108,28 +132,18 @@ class CreateLGBMModel:
         create_lstm_pipeline(self)
     """
 
-    def __init__(self, X, y, features, task):
-        self.X = X
-        self.y = y
-
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            self.X, self.y, test_size=0.2, stratify=self.X["GICS Sector"]
-        )
-
-        self.features = features
+    def __init__(self, X_train, X_test, y_train, y_test, task):
+        self.X_train = X_train
+        self.X_test = X_test
+        self.y_train = y_train
+        self.y_test = y_test
         self.task = task
 
     def create_pipeline(self):
 
-        misc_cols = [c for c in self.X.columns if c not in self.features]
-
-        # X.drop(drop_cols, axis=1, inplace=True)
-
         # Identify numerical and categorical columns
-        numerical_cols = self.X[self.features].select_dtypes(include=["number"]).columns
-        categorical_cols = (
-            self.X[self.features].select_dtypes(exclude=["number"]).columns
-        )
+        numerical_cols = self.X_train.select_dtypes(include=["number"]).columns
+        categorical_cols = self.X_train.select_dtypes(exclude=["number"]).columns
 
         # Define preprocessing steps for numerical and categorical columns
         numerical_transformer = Pipeline(steps=[("scaler", StandardScaler())])
@@ -153,8 +167,14 @@ class CreateLGBMModel:
             )
         elif self.task == "classification":
             model = Pipeline(
-                steps=[("preprocessor", preprocessor), ("regressor", LGBMClassifier())]
+                steps=[("preprocessor", preprocessor), ("classifier", LGBMClassifier())]
             )
+
+        return model
+
+    def fit(self):
+        model = self.create_pipeline()
+        model.fit(self.X_train, self.y_train)
 
         return model
 
@@ -187,8 +207,11 @@ class CreateLGBMModel:
             },
             n_iter=50,
             random_state=42,
+            return_train_score=True,
+            scoring="neg_mean_squared_error",
         )
 
         opt.fit(self.X_train, self.y_train)
 
         print("best params: %s" % str(opt.best_params_))
+        return opt
