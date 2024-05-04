@@ -48,8 +48,8 @@ class PreProcessor:
         """Prep raw data for further processing"""
         self.df[self.date_col] = pd.to_datetime(self.df[self.date_col])
 
-        # Remove records before 1900
-        self.df = self.df[self.df[self.date_col] >= pd.to_datetime('1900-01-01')]
+        # Remove records before 1990
+        self.df = self.df[self.df[self.date_col] >= pd.to_datetime('1990-01-01')]
 
         # Only include tickers with 5 years or more observations
         ticker_days = (
@@ -111,6 +111,9 @@ class PreProcessor:
         """Run all methods and save to designated path"""
         self.clean_data()
         self.add_indicators()
+        self.df.dropna() # This is dropping cryptos because twelve data doesn't give volume info. Need to find better data source.and
+        self.df = self.df[(self.df.T != 0).any()]
+        
 
         path = "data/data_model.csv"
         self.df.to_csv(path, index_label=False)
