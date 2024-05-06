@@ -21,8 +21,10 @@ class GetUpdateData:
                 self.existing_data = (pd.read_csv(self.existing_data_path, parse_dates=['datetime'])
                                     .sort_values(['ticker', 'datetime'], ascending=False)
                                     .drop_duplicates(subset='ticker'))
+            # except:
+            #     raise ValueError("existing_data_path is either incorrect or undefined.")
             except:
-                raise ValueError("existing_data_path is either incorrect or undefined.")
+                pass
 
 
     def get_tickers(self):
