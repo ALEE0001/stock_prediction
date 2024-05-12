@@ -19,6 +19,7 @@ class PreProcessor:
         low_col (str): Column name for stock low price
         close_col (str): Column name for close price
         volume_col (str): Column name for volume
+        look_ahead (int): Number of trading intervals to look ahead for target generation
 
     Methods:
         generate_target(self)
@@ -34,6 +35,7 @@ class PreProcessor:
         low_col,
         close_col,
         volume_col,
+        look_ahead
     ):
         self.df = df
         self.ticker_col = ticker_col
@@ -43,6 +45,10 @@ class PreProcessor:
         self.low_col = low_col
         self.close_col = close_col
         self.volume_col = volume_col
+        
+        self.look_ahead = (
+            -look_ahead
+        )  # Shift value. Negative looks at future, positive looks at past
 
     def clean_data(self):
         """Prep raw data for further processing"""
@@ -106,13 +112,36 @@ class PreProcessor:
             l_df.append(data_temp)
 
         self.df = pd.concat(l_df)
+        
+        
+    def generate_target(self):
+        """
+        Description:
+            generates target variable for model training.
+        """
+
+        self.df["FutureClose"] = self.df.groupby(self.ticker_col)[self.close_col].shift(
+            self.look_ahead
+        )
+
+        self.df["target_direction"] = (
+            self.df["FutureClose"] > self.df[self.close_col]
+        ).astype(int)
+        self.df["target_percent_gain"] = (
+            self.df["FutureClose"] - self.df[self.close_col]
+        ) / self.df[self.close_col]
+
+        self.df.drop("FutureClose", axis=1, inplace=True)
 
     def pre_process(self):
         """Run all methods and save to designated path"""
         self.clean_data()
         self.add_indicators()
-        self.df.dropna() # This is dropping cryptos because twelve data doesn't give volume info. Need to find better data source.and
+        self.generate_target()
+        self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        self.df.dropna(inplace=True) # This is dropping cryptos because twelve data doesn't give volume info. Need to find better data source.
         self.df = self.df[(self.df.T != 0).any()]
+        self.df = self.df.set_index(self.date_col).sort_index()
         
 
         path = "data/data_model.csv"
