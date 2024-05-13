@@ -264,20 +264,19 @@ class GetDataFRED:
         data_frames = []
 
         dict_id = {
-            "DGS10":"pc1", # 10-Year Treasury Constant Maturity Rate (DGS10)
-            "FEDFUNDS":"pc1", # Effective Federal Funds Rate (FEDFUNDS)
-            "GDP":"pc1", # Gross Domestic Product (GDP)
+            "DGS10": "pc1",  # 10-Year Treasury Constant Maturity Rate (DGS10)
+            "FEDFUNDS": "pc1",  # Effective Federal Funds Rate (FEDFUNDS)
+            "GDP": "pc1",  # Gross Domestic Product (GDP)
             # "CPI", # Consumer Price Index (CPI)
-            "UNRATE":"pc1", # Unemployment Rate (UNRATE)
-            "CP":"pc1", # Corporate Profits After Tax (CP)
-            "M2":"pc1", # M2 Money Stock (M2)
-            "SP500":"pc1", # S&P 500 Index (SP500)
-            "NASDAQCOM":"pc1", # NASDAQ Composite Index (NASDAQCOM)
-            "UMCSENT":"pc1", # University of Michigan Consumer Sentiment Index (UMCSENT)
-            "EXHOSLUSM495S":"lin", # Existing Home Sales (EXHOSLUSM495S)
-            "HSN1F":"pc1", # New One Family Houses Sold: United States
-            "MSPNHSUS":"pc1", # Median Sales Price for New Houses Sold in the United States
-            "TWEXBPA":"pc1", # Trade Weighted U.S. Dollar Index: Broad (TWEXBPA)
+            "UNRATE": "pc1",  # Unemployment Rate (UNRATE)
+            "CP": "pc1",  # Corporate Profits After Tax (CP)
+            "WM2NS": "pc1",  # Money Stock Measures  
+            "SP500": "pc1",  # S&P 500 Index (SP500)
+            "NASDAQCOM": "pc1",  # NASDAQ Composite Index (NASDAQCOM)
+            "UMCSENT": "pc1",  # University of Michigan Consumer Sentiment Index (UMCSENT)
+            "EXHOSLUSM495S": "lin",  # Existing Home Sales (EXHOSLUSM495S)
+            "HSN1F": "pc1",  # New One Family Houses Sold: United States
+            "MSPNHSUS": "pc1",  # Median Sales Price for New Houses Sold in the United States
         }
 
         for k, v in dict_id.items():
@@ -288,31 +287,43 @@ class GetDataFRED:
             recs = dictr["observations"]
             temp_df = json_normalize(recs)
             temp_df["id"] = k
-            
+            temp_df = temp_df[["id", "date", "value"]]
+
             # Drop rows with NaN values
-            temp_df['value'] = pd.to_numeric(temp_df['value'], errors='coerce')
-            temp_df = temp_df.dropna(subset=['value']) 
-            
-            
+            temp_df["value"] = pd.to_numeric(temp_df["value"], errors="coerce")
+            temp_df = temp_df.dropna(subset=["value"])
+
             # Create rows for missing dates (unit=day) and fill it in with previous value
             temp_df["date"] = pd.to_datetime(temp_df["date"])
-            idx = pd.date_range(start=temp_df['date'].min(), end=temp_df['date'].max())
-            temp_df = temp_df.set_index('date').reindex(idx).rename_axis(index='datetime').reset_index()
-            
-            # Forward fill missing values with the previous value
-            temp_df = temp_df.ffill()
+            print(
+                f"{k} [min-max] date: [{temp_df['date'].min()}-{temp_df['date'].max()}]"
+            )
+            idx = pd.date_range(start=temp_df["date"].min(), end=temp_df["date"].max())
+            temp_df = (
+                temp_df.set_index("date")
+                .reindex(idx)
+                .rename_axis(index="datetime")
+                .reset_index()
+            )
 
             data_frames.append(temp_df)
 
         df_out = pd.concat([i for i in data_frames if len(i) > 0])
-        df_out = df_out[['id', 'datetime', 'value']]
+
+        # Pivot and Forward fill missing values with the previous value
+        df_out = (
+            df_out.pivot_table(columns="id", values="value", index="datetime")
+            .reset_index()
+            .sort_values("datetime", ascending=True)
+            .ffill()
+        )
 
         return df_out
-    
+
     def download_data(self):
         print(f"Getting FRED Data...")
         df_out = self.get_data()
 
-        path = f'data/fred.csv'
+        path = f"data/fred.csv"
         df_out.to_csv(path, index=False)
         print(f"Download completed to {path}")
