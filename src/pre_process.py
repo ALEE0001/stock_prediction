@@ -11,7 +11,7 @@ class PreProcessor:
         prepares data for model training.
 
     Attributes:
-        df (dataframe):
+        df (dataframe): Dataframe of the main stock data
         ticker_col (str): Column name for stock ticker/symbol
         date_col (str): Column name for date in yyyy-mm-dd format
         open_col (str): Column name for stock open price
@@ -35,7 +35,8 @@ class PreProcessor:
         low_col,
         close_col,
         volume_col,
-        look_ahead
+        look_ahead,
+        df_fred
     ):
         self.df = df
         self.ticker_col = ticker_col
@@ -49,6 +50,8 @@ class PreProcessor:
         self.look_ahead = (
             -look_ahead
         )  # Shift value. Negative looks at future, positive looks at past
+        
+        self.df_fred = df_fred
 
     def clean_data(self):
         """Prep raw data for further processing"""
@@ -85,7 +88,6 @@ class PreProcessor:
 
     def add_indicators(self, window_slow=252, window_fast=126, window_sign=21):
         """Add all default indicators from ta library, then add same indicator types with custom window size (defaulted to long term: ~1 year lookback)"""
-        base_cols = [self.open_col, self.high_col, self.low_col, self.close_col, self.volume_col]
 
         l_df = []
 
@@ -100,19 +102,19 @@ class PreProcessor:
                 fillna=True,
             )
 
-            # data_temp['momentum_ao_cust'] = ta.momentum.AwesomeOscillatorIndicator(high=self.high, low=self.low, window1=self.window_sign, window2=self.window_fast, fillna=False)
-            # data_temp['momentum_kama_cust'] = ta.momentum.KAMAIndicator(close=self.close, window=self.window_fast, pow1=self.window_sign, pow2=self.window_slow, fillna=False)
-            # data_temp['momentum_ppo_cust'] = ta.momentum.PercentagePriceOscillator(close=self.close, window_slow=self.window_slow, window_fast=self.window_fast, window_sign=self.window_sign, fillna=False)
-            # data_temp['momentum_pvo_cust'] = ta.momentum.PercentageVolumeOscillator(volume=self.volume, window_slow=self.window_slow, window_fast=self.window_fast, window_sign=self.window_sign, fillna=False)
-            # data_temp['momentum_roc_cust'] = ta.momentum.ROCIndicator(close=self.close, window=self.window_fast, fillna=False)
-            # data_temp['momentum_rsi_cust'] = ta.momentum.RSIIndicator(close=self.close, window=self.window_fast, fillna=False)
-            # data_temp['momentum_stoch_rsi_cust'] = ta.momentum.StochRSIIndicator(close=self.close, window=self.window_fast, smooth1=self.window_sign, smooth2=self.window_sign, fillna=False)
-            # data_temp['momentum_stoch_o_cust'] = ta.momentum.StochasticOscillator(high=self.high, low=self.low, close=self.close, window=self.window_fast, smooth_window=self.window_sign, fillna=False)
-
             l_df.append(data_temp)
 
         self.df = pd.concat(l_df)
         
+    def add_misc(self):
+        """Add additional features that I think might be informative"""
+        self.df['year'] = self.df[self.date_col].dt.year
+        self.df['month'] = self.df[self.date_col].dt.month
+        self.df['dayofweek'] = self.df[self.date_col].dt.weekday
+        
+    def join_fred(self):
+        """Join the FRED in to the main data"""
+        self.df = self.df.merge(self.df_fred, on=self.date_col, how='left')
         
     def generate_target(self):
         """
@@ -137,10 +139,12 @@ class PreProcessor:
         """Run all methods and save to designated path"""
         self.clean_data()
         self.add_indicators()
+        self.add_misc()
+        self.join_fred()
         self.generate_target()
         self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
         self.df.dropna(inplace=True) # This is dropping cryptos because twelve data doesn't give volume info. Need to find better data source.
-        self.df = self.df[(self.df.T != 0).any()]
+        # self.df = self.df[(self.df.T != 0).any()]
         self.df = self.df.set_index(self.date_col).sort_index()
         
 
