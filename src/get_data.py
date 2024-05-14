@@ -271,10 +271,10 @@ class GetDataFRED:
             "UNRATE": "pc1",  # Unemployment Rate (UNRATE)
             "CP": "pc1",  # Corporate Profits After Tax (CP)
             "WM2NS": "pc1",  # Money Stock Measures  
-            "SP500": "pc1",  # S&P 500 Index (SP500)
+            # "SP500": "pc1",  # S&P 500 Index (SP500)
             "NASDAQCOM": "pc1",  # NASDAQ Composite Index (NASDAQCOM)
             "UMCSENT": "pc1",  # University of Michigan Consumer Sentiment Index (UMCSENT)
-            "EXHOSLUSM495S": "lin",  # Existing Home Sales (EXHOSLUSM495S)
+            # "EXHOSLUSM495S": "lin",  # Existing Home Sales (EXHOSLUSM495S)
             "HSN1F": "pc1",  # New One Family Houses Sold: United States
             "MSPNHSUS": "pc1",  # Median Sales Price for New Houses Sold in the United States
         }
@@ -291,30 +291,31 @@ class GetDataFRED:
 
             # Drop rows with NaN values
             temp_df["value"] = pd.to_numeric(temp_df["value"], errors="coerce")
-            temp_df = temp_df.dropna(subset=["value"])
-
-            # Create rows for missing dates (unit=day) and fill it in with previous value
+            # temp_df = temp_df.dropna(subset=["value"])
+            
             temp_df["date"] = pd.to_datetime(temp_df["date"])
-            print(
-                f"{k} [min-max] date: [{temp_df['date'].min()}-{temp_df['date'].max()}]"
-            )
-            idx = pd.date_range(start=temp_df["date"].min(), end=temp_df["date"].max())
-            temp_df = (
-                temp_df.set_index("date")
-                .reindex(idx)
-                .rename_axis(index="datetime")
-                .reset_index()
-            )
+            print(f"{k} [min-max] date: [{temp_df['date'].min()}-{temp_df['date'].max()}]")
 
             data_frames.append(temp_df)
 
         df_out = pd.concat([i for i in data_frames if len(i) > 0])
-
+        
+        # Create rows for missing dates (unit=day) and fill it in with previous value
+        df_out["date"] = pd.to_datetime(df_out["date"])
+        
         # Pivot and Forward fill missing values with the previous value
         df_out = (
-            df_out.pivot_table(columns="id", values="value", index="datetime")
+            df_out.pivot_table(columns="id", values="value", index="date")
             .reset_index()
-            .sort_values("datetime", ascending=True)
+            .sort_values("date", ascending=True)
+        )
+        
+        idx = pd.date_range(start=df_out["date"].min(), end=df_out["date"].max())
+        df_out = (
+            df_out.set_index("date")
+            .reindex(idx)
+            .rename_axis(index="datetime")
+            .reset_index()
             .ffill()
         )
 
