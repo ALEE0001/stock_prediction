@@ -1,9 +1,6 @@
 import pandas as pd
 import numpy as np
-import ta
-from ta import add_all_ta_features
-from ta.utils import dropna
-
+import pandas_ta as ta
 
 class PreProcessor:
     """
@@ -86,29 +83,57 @@ class PreProcessor:
         )
         
 
-    def add_indicators(self, window_slow=252, window_fast=126, window_sign=21):
+    def add_indicators(self):
         """Add all default indicators from ta library, then add same indicator types with custom window size (defaulted to long term: ~1 year lookback)"""
 
         l_df = []
 
+        MyStrategy = ta.Strategy(
+            name="MyIndicators",
+            ta=[
+                {"kind": "sma", "length": 10},  # Simple Moving Average
+                {"kind": "ema", "length": 20},  # Exponential Moving Average
+                {"kind": "rsi", "length": 14},  # Relative Strength Index
+                {"kind": "macd", "fast": 12, "slow": 26, "signal": 9},  # Moving Average Convergence Divergence
+                {"kind": "stoch", "k": 14, "d": 3},  # Stochastic Oscillator
+                {"kind": "adx", "length": 14},  # Average Directional Index
+                {"kind": "cci", "length": 20},  # Commodity Channel Index
+                {"kind": "atr", "length": 14},  # Average True Range
+                {"kind": "bbands", "length": 20, "std": 2},  # Bollinger Bands
+                {"kind": "roc", "length": 12},  # Rate of Change
+                {"kind": "mfi", "length": 14},  # Money Flow Index
+                {"kind": "obv"},  # On-Balance Volume
+                {"kind": "vwap"},  # Volume Weighted Average Price
+                {"kind": "trix", "length": 15},  # Triple Exponential Average
+                {"kind": "dpo", "length": 20},  # Detrended Price Oscillator
+                {"kind": "kst"},  # KST Oscillator
+                {"kind": "ichimoku"},  # Ichimoku Cloud
+                {"kind": "aroon", "length": 25},  # Aroon Indicator
+                {"kind": "willr", "length": 14},  # Williams %R
+                {"kind": "mom", "length": 10},  # Momentum
+                {"kind": "psar"},  # Parabolic Stop and Reverse
+                {"kind": "wma", "length": 30},  # Weighted Moving Average
+                {"kind": "wma", "length": 50},  # Weighted Moving Average
+                {"kind": "wma", "length": 200},  # Weighted Moving Average
+                {"kind": "hma", "length": 20},  # Hull Moving Average
+                {"kind": "t3", "length": 10},  # T3 Moving Average
+                {"kind": "kama", "length": 10},  # Kaufman's Adaptive Moving Average
+            ]
+        )
+
         for i in self.df[self.ticker_col].unique():
-            data_temp = add_all_ta_features(
-                self.df[self.df[self.ticker_col] == i],
-                open=self.open_col,
-                high=self.high_col,
-                low=self.low_col,
-                close=self.close_col,
-                volume=self.volume_col,
-                fillna=True,
-            )
+            data_temp = self.df[self.df[self.ticker_col] == i]
+            data_temp.set_index(self.date_col, inplace=True)
+            data_temp.ta.strategy(MyStrategy, append=True, timed=True, date_col=self.date_col)
 
             l_df.append(data_temp)
 
         self.df = pd.concat(l_df)
+        self.df.reset_index(inplace=True)
         
     def add_misc(self):
         """Add additional features that I think might be informative"""
-        self.df['year'] = self.df[self.date_col].dt.year
+        # self.df['year'] = self.df[self.date_col].dt.year
         self.df['month'] = self.df[self.date_col].dt.month
         self.df['dayofweek'] = self.df[self.date_col].dt.weekday
         
@@ -142,11 +167,13 @@ class PreProcessor:
         self.add_misc()
         self.join_fred()
         self.generate_target()
+
         self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        self.df.dropna(inplace=True) # This is dropping cryptos because twelve data doesn't give volume info. Need to find better data source.
+        # self.df.dropna(inplace=True) # This is dropping cryptos because twelve data doesn't give volume info. Need to find better data source.
         # self.df = self.df[(self.df.T != 0).any()]
-        self.df = self.df.set_index(self.date_col).sort_index()
-        
+        self.df = self.df.sort_values([self.date_col, self.ticker_col]).reset_index(drop=True)
+        self.df = self.df[self.df['GICS Sector'] != 'Cryptocurrency']
+        self.df.columns = self.df.columns.str.replace('.', '_', regex=False)
 
         path = "data/data_model.csv"
         self.df.to_csv(path, index_label=False)

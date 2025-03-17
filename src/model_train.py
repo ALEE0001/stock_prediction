@@ -1,42 +1,12 @@
 import pandas as pd
-import numpy as np
-import seaborn as sb
-import matplotlib.pyplot as plt
-
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import (
-    StandardScaler,
-    MinMaxScaler,
-    OrdinalEncoder,
-    OneHotEncoder,
-    KBinsDiscretizer,
-)
-from sklearn.decomposition import PCA
-from sklearn.model_selection import (
-    train_test_split,
-    cross_val_score,
-    RandomizedSearchCV,
-)
-
-import lightgbm as lgb
-from lightgbm import LGBMRegressor, LGBMClassifier
+import pytorch_forecasting as pf
+from pytorch_forecasting.data import TimeSeriesDataSet
+import pytorch_forecasting.models.temporal_fusion_transformer as tft
 
 import torch
-import torch.nn as nn
-
-from skopt import BayesSearchCV
-from skopt.space import Real, Categorical, Integer
-
-from sklearn.metrics import (
-    r2_score,
-    mean_absolute_error,
-    mean_squared_error,
-    mean_squared_log_error,
-    mean_absolute_percentage_error,
-    median_absolute_error,
-)
-
+from torch.utils.data import DataLoader
+from torch import nn
+from sklearn.preprocessing import StandardScaler
 
 class ModelPrepData:
     """
@@ -44,174 +14,189 @@ class ModelPrepData:
         prepares data for model training.
 
     Attributes:
-        df (dataframe):
-        ticker_col (str): Column Name for ticker/symbol
-        close_col (str): Column Name for close price
+        df (dataframe): DataFrame containing the data
         features (list): List of feature column names
-        target_type (str): [direction, percent_gain]
-        look_ahead (int): Number of trading intervals to look ahead for target generation
-        test_size (float): test size to use for train/test split
+        targets (list): List of column names for targets
+        test_size (float): Test size to use for train/test split
 
     Methods:
-        generate_target(self)
         create_train_test(self)
     """
 
-    def __init__(
-        self,
-        df,
-        ticker_col,
-        close_col,
-        features,
-        target_type,
-        look_ahead,
-        test_size=0.2,
-    ):
+    def __init__(self, df, date_col, ticker_col, features, targets, test_start_date):
         self.df = df.copy()
-        self.ticker_col = ticker_col
-        self.close_col = close_col
-        self.features = features
-        self.target_type = target_type
-        self.look_ahead = look_ahead
-        self.test_size = test_size
-
-    def generate_target(self):
-        """
-        Description:
-            generates target variable for model training.
-        """
-
-        if self.target_type == "direction":
-            self.df["FutureClose"] = self.df.groupby(self.ticker_col)[
-                self.close_col
-            ].shift(self.look_ahead)
-            self.df["target"] = (
-                self.df["FutureClose"] > self.df[self.close_col]
-            ).astype(int)
-        elif self.target_type == "percent_gain":
-            self.df["FutureClose"] = self.df.groupby(self.ticker_col)[
-                self.close_col
-            ].shift(self.look_ahead)
-            self.df["target"] = (
-                self.df["FutureClose"] - self.df[self.close_col]
-            ) / self.df[self.close_col]
-        else:
-            raise ValueError("target_type has to be one of [direction, percent_gain]")
-
-        self.df.drop("FutureClose", axis=1, inplace=True)
-
-    def create_train_test(self):
-        self.generate_target()
-        self.df = self.df[self.features + ["target"]]
+        self.date_col = date_col
         
-        self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        self.df.dropna(inplace=True)
+        self.df[self.date_col] = pd.to_datetime(self.df[self.date_col])
+        self.train_df = self.df[self.df[self.date_col] < test_start_date]
+        self.test_df = self.df[self.df[self.date_col] >= test_start_date]
+        self.train_df[self.date_col] = self.train_df[self.date_col].map(pd.Timestamp.toordinal)
+        self.test_df[self.date_col] = self.test_df[self.date_col].map(pd.Timestamp.toordinal)
+        
+        self.ticker_col = ticker_col
+        self.features = features
+        self.targets = targets
 
-        X = self.df.drop("target", axis=1)
-        y = self.df["target"]
+    def prepare(self):
+        self.df = self.df[self.features + [self.date_col] + self.targets]
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=self.test_size
+        # Create TimeSeriesDataSet for pytorch-forecasting
+        max_encoder_length = 24
+        max_prediction_length = 10
+
+        training = TimeSeriesDataSet(
+            self.train_df,
+            time_idx=self.date_col,
+            target=self.targets,
+            group_ids=[self.ticker_col],
+            max_encoder_length=max_encoder_length,
+            max_prediction_length=max_prediction_length,
+            static_categoricals=[],
+            time_varying_known_reals=self.features,
+            time_varying_unknown_reals=self.targets,
+            allow_missing_timesteps=True,
+            scalers = {}
         )
 
-        return X_train, X_test, y_train, y_test
+        validation = TimeSeriesDataSet.from_dataset(training, self.df, predict=True, stop_randomization=True)
 
+        test = TimeSeriesDataSet(
+            self.test_df,
+            time_idx=self.date_col,
+            target=self.targets,
+            group_ids=[self.ticker_col],
+            max_encoder_length=max_encoder_length,
+            max_prediction_length=max_prediction_length,
+            static_categoricals=[],
+            time_varying_known_reals=self.features,
+            time_varying_unknown_reals=self.targets,
+            allow_missing_timesteps=True,
+            scalers = {}
+        )
 
-class CreateLGBMModel:
+        train_dataloader = training.to_dataloader(train=True, batch_size=64, num_workers=0)
+        val_dataloader = validation.to_dataloader(train=False, batch_size=64, num_workers=0)
+        test_dataloader = test.to_dataloader(train=False, batch_size=64, num_workers=0)
+
+        return train_dataloader, val_dataloader, test_dataloader
+    
+class CustomTFT(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size_regression, output_size_classification):
+        super(CustomTFT, self).__init__()
+        
+        # Temporal Fusion Transformer (TFT)
+        self.tft = tft.TemporalFusionTransformer(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            output_size=hidden_size, 
+            dropout=0.1,
+        )
+        
+        # Linear layer for regression (stock price prediction)
+        self.regression_layer = nn.Linear(hidden_size, output_size_regression)
+        
+        # Linear layer for classification (stock movement direction)
+        self.classification_layer = nn.Linear(hidden_size, output_size_classification)
+        
+    def forward(self, x):
+        # Pass through the TFT model
+        tft_output = self.tft(x)
+        
+        # Linear layer for regression
+        regression_output = self.regression_layer(tft_output)
+        
+        # Linear layer for classification
+        classification_output = self.classification_layer(tft_output)
+        
+        return regression_output, classification_output
+
+class CreateModel:
     """
     Description:
-        Builds Model
+        Class of methods to build my Model
 
     Attributes:
-        X (dataframe): features
-        y (array): target label
-        task (str): [regression, classification]
+        train_dataloader (DataLoader): DataLoader for training data
+        val_dataloader (DataLoader): DataLoader for validation data
 
     Methods:
-        create_lgbm_pipeline(self)
-        create_lstm_pipeline(self)
+        fit(self)
     """
 
-    def __init__(self, X_train, X_test, y_train, y_test, task):
-        self.X_train = X_train
-        self.X_test = X_test
-        self.y_train = y_train
-        self.y_test = y_test
-        self.task = task
-
-    def create_pipeline(self):
-
-        # Identify numerical and categorical columns
-        numerical_cols = self.X_train.select_dtypes(include=["number"]).columns
-        categorical_cols = self.X_train.select_dtypes(exclude=["number"]).columns
-
-        # Define preprocessing steps for numerical and categorical columns
-        numerical_transformer = Pipeline(steps=[("scaler", StandardScaler())])
-
-        categorical_transformer = Pipeline(
-            steps=[("onehot", OneHotEncoder(handle_unknown="ignore"))]
-        )
-
-        # Combine preprocessing steps using ColumnTransformer
-        preprocessor = ColumnTransformer(
-            transformers=[
-                ("num", numerical_transformer, numerical_cols),
-                ("cat", categorical_transformer, categorical_cols),
-            ]
-        )
-
-        # Create the pipeline with preprocessor and LightGBM Regressor
-        if self.task == "regression":
-            model = Pipeline(
-                steps=[("preprocessor", preprocessor), ("regressor", LGBMRegressor())]
-            )
-        elif self.task == "classification":
-            model = Pipeline(
-                steps=[("preprocessor", preprocessor), ("classifier", LGBMClassifier())]
-            )
-
-        return model
+    def __init__(self, train_dataloader, val_dataloader, test_dataloader):
+        self.train_dataloader = train_dataloader
+        self.val_dataloader = val_dataloader
+        self.test_dataloader = test_dataloader
 
     def fit(self):
-        model = self.create_pipeline()
-        model.fit(self.X_train, self.y_train)
+        # Check if GPU is available
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Initialize the custom model
+        input_size = len(self.train_dataloader.dataset.reals)
+        hidden_size = 4096
+        output_size_regression = 1 
+        output_size_classification = 2 
+
+        model = CustomTFT(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            output_size_regression=output_size_regression,
+            output_size_classification=output_size_classification
+        ).to(device)
+
+        # Define loss function and optimizer
+        regression_criterion = nn.MSELoss()
+        classification_criterion = nn.CrossEntropyLoss()
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
+
+        # Training loop
+        num_epochs = 30
+        for epoch in range(num_epochs):
+            model.train()
+            for batch in self.train_dataloader:
+                optimizer.zero_grad()
+                x, y = batch
+                x, y = x.to(device), {k: v.to(device) for k, v in y.items()}
+                regression_output, classification_output = model(x)
+                regression_loss = regression_criterion(regression_output, y['regression'])
+                classification_loss = classification_criterion(classification_output, y['classification'])
+                loss = regression_loss + classification_loss
+                loss.backward()
+                optimizer.step()
+
+            # Validation loop
+            model.eval()
+            val_loss = 0
+            with torch.no_grad():
+                for batch in self.val_dataloader:
+                    x, y = batch
+                    x, y = x.to(device), {k: v.to(device) for k, v in y.items()}
+                    regression_output, classification_output = model(x)
+                    regression_loss = regression_criterion(regression_output, y['regression'])
+                    classification_loss = classification_criterion(classification_output, y['classification'])
+                    loss = regression_loss + classification_loss
+                    val_loss += loss.item()
+
+                print(f'Epoch {epoch+1}/{num_epochs}, Loss: {loss.item()}, Val Loss: {val_loss/len(self.val_dataloader)}')
+            
+            scheduler.step(val_loss)
+            
+        # Evaluate on test set
+        model.eval()
+        test_loss = 0
+        with torch.no_grad():
+            for batch in self.test_dataloader:
+                x, y = batch
+                x, y = x.to(device), {k: v.to(device) for k, v in y.items()}
+                regression_output, classification_output = model(x)
+                regression_loss = regression_criterion(regression_output, y['regression'])
+                classification_loss = classification_criterion(classification_output, y['classification'])
+                loss = regression_loss + classification_loss
+                test_loss += loss.item()
+
+                print(f'Test Loss: {test_loss/len(self.test_dataloader)}')
+                
         return model
-
-    def hpo(self):
-
-        model = self.create_pipeline()
-
-        opt = BayesSearchCV(
-            model,
-            {
-                # 'boosting_type': 'gbdt',
-                "num_leaves": Integer(10, 100),
-                # 'max_depth':-1,
-                "learning_rate": Real(0.0001, 0.1),
-                "n_estimators": Integer(100, 5000),
-                # 'subsample_for_bin': 200000,
-                # 'objective': None,
-                # 'class_weight': None,
-                "min_split_gain": Real(0.0, 0.1),
-                "min_child_weight": Real(0.001, 0.01),
-                "min_child_samples": Integer(20, 10000),
-                # 'subsample': 1.0,
-                # 'subsample_freq': 0,
-                # 'colsample_bytree': 1.0,
-                "reg_alpha": Real(1, 80),
-                "reg_lambda": Real(1, 100),
-                # 'random_state': None,
-                # 'n_jobs': None,
-                "importance_type": Categorical(["gain"]),
-            },
-            n_iter=50,
-            random_state=42,
-            return_train_score=True,
-            scoring="neg_mean_squared_error",
-        )
-
-        opt.fit(self.X_train, self.y_train)
-
-        print("best params: %s" % str(opt.best_params_))
-        return opt
