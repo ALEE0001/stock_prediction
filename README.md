@@ -3,6 +3,8 @@
 ## Overview
 This project provides a platform for predicting stock market prices and evaluating trading strategies. It combines traditional technical analysis with modern machine learning approaches, including models such as LSTM (Long Short-Term Memory) and Temporal Fusion Transformer (TFT). The platform is designed for experimentation, model development, and performance analysis in the context of financial time series forecasting and strategy backtesting.
 
+![Architecture](algo-trading.png)
+
 ## Features
 - **Comprehensive Pipeline:** Covers data ingestion, preprocessing, model training, evaluation, and backtesting.
 - **Technical and ML Strategies:** Supports both rule-based technical trading strategies and machine learning models for price prediction.
